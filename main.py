@@ -107,6 +107,9 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="🛠 Тест отправки", callback_data="test_send")
     )
+    builder.row(
+        InlineKeyboardButton(text="📂 Парсинг истории", callback_data="parse_history")
+    )
     return builder.as_markup()
 
 # ================= Welcome Message =================
@@ -289,6 +292,44 @@ async def parse_channels():
         except Exception as e:
             logger.error(f"Error parsing channel {channel}: {e}")
 
+async def parse_history():
+    """Парсим все старые записи из источников (каналы)."""
+    for channel in config.sources["channels"]:
+        try:
+            logger.info(f"Parsing full history of: {channel}")
+            async for msg in userbot.iter_messages(channel, limit=None):  # limit=None = все сообщения
+                if not msg.message and not msg.media:
+                    continue
+
+                clean_content = msg.text or msg.caption or ""
+                clean_content = remove_hyperlinks(clean_content)
+                msg_hash = get_message_hash(clean_content + str(msg.media))
+
+                if msg_hash not in config.sent_hashes:
+                    if not config.keywords or contains_keywords(clean_content, config.keywords):
+                        try:
+                            if msg.media:
+                                await userbot.send_file(
+                                    config.target_channel,
+                                    msg.media,
+                                    caption=clean_content[:1024] if clean_content else None
+                                )
+                            else:
+                                await userbot.send_message(
+                                    config.target_channel,
+                                    clean_content[:4000],
+                                    link_preview=False
+                                )
+
+                            config.sent_hashes.add(msg_hash)
+                            config.save()
+                            logger.info(f"History message forwarded from {channel}")
+                        except Exception as e:
+                            logger.error(f"Error forwarding history message: {e}")
+        except Exception as e:
+            logger.error(f"Error parsing history from {channel}: {e}")
+
+
 async def parsing_loop():
     global parsing_active
     parsing_active = True
@@ -406,6 +447,16 @@ async def set_target_handler(callback: types.CallbackQuery):
         "Бот должен быть администратором в этом канале!\n\n"
         f"Текущий: {config.target_channel or 'не задан'}"
     )
+
+@dp.callback_query(F.data == "parse_history")
+async def parse_history_handler(callback: types.CallbackQuery):
+    if not config.target_channel:
+        await callback.answer("❌ Сначала укажите целевой канал!", show_alert=True)
+        return
+
+    await callback.answer("📜 Парсинг истории запущен!")
+    asyncio.create_task(parse_history())
+
 
 @dp.callback_query(F.data == "add_source")
 async def add_source_handler(callback: types.CallbackQuery):
